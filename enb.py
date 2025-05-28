@@ -1,6 +1,6 @@
 import discord
-from discord.ext import commands
-from discord import app_commands, Intents, Embed, Color
+from discord.ext import commands # tasks는 이제 필요 없음
+from discord import app_commands, Intents, Embed, Color, CustomActivity, Status # CustomActivity, Status 임포트 추가
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
@@ -9,10 +9,11 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
-from datetime import datetime, date, timedelta # timedelta 추가
+from datetime import datetime, date, timedelta
 import os
 from dotenv import load_dotenv
 import re
+# from itertools import cycle # cycle은 이제 필요 없음
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
@@ -81,26 +82,14 @@ MEAL_TIME_CODES = {
     ("20", "6-12"): "아침", ("20", "13-25"): "점심"
 }
 
-def fetch_menu_by_specific_id_pattern(target_dt: date): # 입력은 조회할 날짜의 date 객체
+def fetch_menu_by_specific_id_pattern(target_dt: date):
     print(f"[{datetime.now()}] '{target_dt.strftime('%Y-%m-%d')}' 메뉴 크롤링 시작...")
-    
-    # --- 주차(week) 계산 로직 추가 ---
     today_dt = date.today()
-    
-    # 대상 날짜의 월요일과 오늘 날짜의 월요일을 기준으로 주 차이를 계산하는 것이 더 정확할 수 있음
-    # target_dt의 ISO 주에서 월요일 찾기
     target_monday = target_dt - timedelta(days=target_dt.weekday())
-    # today_dt의 ISO 주에서 월요일 찾기
     today_monday = today_dt - timedelta(days=today_dt.weekday())
-    
-    # 두 월요일 사이의 일 수 차이를 계산하고, 7로 나누어 주 차이를 구함
     delta_days = (target_monday - today_monday).days
-    week_offset = delta_days // 7 # 정수 나눗셈
-    
-    print(f"  대상 날짜: {target_dt}, 오늘 날짜: {today_dt}")
-    print(f"  대상 날짜의 월요일: {target_monday}, 오늘 날짜의 월요일: {today_monday}")
+    week_offset = delta_days // 7
     print(f"  계산된 week_offset: {week_offset}")
-    # --- 주차 계산 로직 끝 ---
 
     chrome_options = ChromeOptions()
     chrome_options.add_argument("--headless")
@@ -111,18 +100,11 @@ def fetch_menu_by_specific_id_pattern(target_dt: date): # 입력은 조회할 �
 
     driver = None
     parsed_menus = {name: [] for name in RESTAURANT_CODES.values()}
-    target_weekday_d_code = str(target_dt.weekday()) # 조회하려는 날짜의 요일 코드 (0:월 ~ 4:금)
-
-    # 주말 예외 처리 (패턴에 주말이 없으므로, 해당 요일 코드로 조회 시 어차피 안나옴)
-    # 하지만 week_offset 계산에는 영향을 주지 않으므로, 먼저 크롤링 시도 후 결과로 판단.
-    # 만약 주말에 "운영 안함"을 명시적으로 표시하고 싶다면, 여기서 target_dt.weekday() >= 5 일때 바로 반환 가능.
-    # (현재 로직은 아래에서 ID 못찾으면 "정보 없음"으로 처리)
+    target_weekday_d_code = str(target_dt.weekday())
 
     try:
         service = ChromeService(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=chrome_options)
-        
-        # 계산된 week_offset을 URL에 적용
         url = f"https://www.cbnucoop.com/service/restaurant/?week={week_offset}"
         print(f"  접속 URL: {url}")
         driver.get(url)
@@ -135,13 +117,7 @@ def fetch_menu_by_specific_id_pattern(target_dt: date): # 입력은 조회할 �
         for (res_code_a, bc_val), meal_name in MEAL_TIME_CODES.items():
             restaurant_name = RESTAURANT_CODES.get(res_code_a)
             if not restaurant_name: continue
-            
-            # ID 생성 시 사용되는 요일 코드는 target_dt의 요일 코드 (0~4)
-            # 웹사이트가 week 파라미터로 해당 주의 메뉴를 보여주면,
-            # 그 주의 테이블에서 target_dt의 요일에 해당하는 열을 읽어야 함.
             target_element_id = f"table-{res_code_a}-{bc_val}-{target_weekday_d_code}"
-            
-            # print(f"    검색 시도 ID: {target_element_id} ({restaurant_name} - {meal_name})") # 너무 많은 로그 방지 위해 주석
             menu_element = soup.find(id=target_element_id)
             
             if menu_element:
@@ -163,24 +139,22 @@ def fetch_menu_by_specific_id_pattern(target_dt: date): # 입력은 조회할 �
                                 
                 if components_for_this_meal:
                     raw_joined_line = ", ".join(components_for_this_meal)
+                    # print(f"    DEBUG Raw joined for [{meal_name}] of {restaurant_name}: '{raw_joined_line}'")
                     final_menu_line = refine_final_menu_string(raw_joined_line)
                     full_menu_entry = f"[{meal_name}] {final_menu_line}"
                     parsed_menus[restaurant_name].append(full_menu_entry)
                     found_any_menu_for_day = True
-                # else: print(f"    ID {target_element_id} 내용 없음 ({restaurant_name} - {meal_name})")
-            # else: print(f"    ID {target_element_id} 찾을 수 없음 ({restaurant_name} - {meal_name})")
+                    # print(f"    Refined for [{meal_name}] of {restaurant_name}: '{full_menu_entry}'")
         
         for res_name in RESTAURANT_CODES.values():
-            if not parsed_menus[res_name]: # 해당 식당에 추가된 메뉴가 하나도 없다면
-                 # 주말이거나, 해당 요일에 운영 안하거나, 메뉴가 없는 경우
-                 if target_dt.weekday() >= 5: # 토, 일
+            if not parsed_menus[res_name]:
+                 if target_dt.weekday() >= 5:
                      parsed_menus[res_name] = [f"{get_korean_weekday_name(target_dt)}요일은 주말 메뉴 정보가 제공되지 않습니다."]
-                 else: # 평일
+                 else:
                      parsed_menus[res_name] = [f"{get_korean_weekday_name(target_dt)}요일에는 해당 식당의 메뉴 정보가 없습니다."]
 
-        if not found_any_menu_for_day and target_dt.weekday() < 5: # 평일인데 어떤 메뉴도 못 찾았다면
+        if not found_any_menu_for_day and target_dt.weekday() < 5:
             print(f"  {target_dt.strftime('%Y-%m-%d')} ({url}) 전체 메뉴 항목 없음.")
-            # 이 경우, 위 로직에 의해 각 식당은 "정보 없음"으로 채워져 있을 것임.
         
         print(f"  크롤링 완료. 접속 URL: {url}")
         return parsed_menus
@@ -190,9 +164,10 @@ def fetch_menu_by_specific_id_pattern(target_dt: date): # 입력은 조회할 �
     finally:
         if driver: driver.quit()
 
-# --- 디스코드 봇 설정 (이하 동일) ---
+# --- 디스코드 봇 설정 ---
 intents = Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
+
 
 @bot.event
 async def on_ready():
@@ -203,6 +178,22 @@ async def on_ready():
     except Exception as e:
         print(f"  슬래시 커맨드 동기화 실패: {e}")
 
+    # --- 고정 CustomActivity 상태 메시지 설정 ---
+    # 원하는 문구와 이모지(선택)를 설정합니다.
+    custom_status_text = "충북대 학식 정보 봇"
+    custom_status_emoji = "🍚"  # 예: 밥 이모지. 원치 않으면 None 또는 ""
+    
+    activity = CustomActivity(name=custom_status_text, emoji=custom_status_emoji if custom_status_emoji else None)
+    
+    try:
+        await bot.change_presence(status=Status.online, activity=activity)
+        print(f"  봇 상태 메시지 설정 완료: '{custom_status_text}' (이모지: {custom_status_emoji if custom_status_emoji else '없음'})")
+    except Exception as e:
+        print(f"  상태 메시지 설정 중 오류 발생: {e}")
+    # --- 상태 메시지 설정 끝 ---
+
+
+# --- 슬래시 커맨드 정의 ---
 @bot.tree.command(name="학식", description="충북대학교 학식 메뉴를 보여줍니다.")
 @app_commands.describe(날짜="조회할 날짜 (예: 2025-05-28, 05-28, 0528, 20250528). 입력 않으면 오늘.")
 async def get_menu_slash(interaction: discord.Interaction, 날짜: str = None):
@@ -233,7 +224,7 @@ async def get_menu_slash(interaction: discord.Interaction, 날짜: str = None):
             return
 
         embed_title = f"📅 {target_dt.strftime('%Y년 %m월 %d일')} ({get_korean_weekday_name(target_dt)}) 충북대학교 학식 메뉴"
-        embed = Embed(title=embed_title, color=Color.random())
+        embed = Embed(title=embed_title, color=Color.purple())
         if not menu_data: embed.description = "조회된 메뉴 정보가 없습니다."
         else:
             has_actual_menu = False
@@ -242,13 +233,8 @@ async def get_menu_slash(interaction: discord.Interaction, 날짜: str = None):
                     has_actual_menu = True
                 menu_str = "\n".join(f"- {m}" for m in items) if items else "- 정보 없음"
                 embed.add_field(name=f"🍽️ {restaurant_name}", value=menu_str, inline=False)
-            if not has_actual_menu and target_dt.weekday() < 5: # 평일인데 실제 메뉴가 없다면
-                # found_any_menu_for_day가 False였고, target_dt가 평일이었다면 이미 각 식당에 "정보 없음" 메시지가 들어갔을 것.
-                # 여기서는 추가적인 메시지를 띄우기보다는, 필드 내용을 신뢰.
-                # 만약 모든 필드가 "정보 없음" 류의 메시지만 있다면, 그것이 결과.
-                # 좀 더 명확한 메시지를 원한다면, has_actual_menu 외에 다른 플래그 필요.
-                # 여기서는 일단 현재 로직 유지.
-                pass
+            if not has_actual_menu and target_dt.weekday() < 5:
+                pass 
             elif not embed.fields and not embed.description: embed.description = "조회된 메뉴 정보가 없습니다."
         await interaction.followup.send(embed=embed)
     except Exception as e:
